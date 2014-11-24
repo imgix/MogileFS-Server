@@ -192,7 +192,7 @@ sub load_config {
     # now let's fix up the listen option to include the port if it doesn't already; we can't use
     # choose_value as that uses set_config and that sends to children; this option doesn't apply
     my $temp_listen = $cmdline{listen} || $cfgfile{listen} || [ '0.0.0.0' ];
-    $conf{listen} = $listen = [ map { /:/ ? $_ : "$_:$conf{conf_port}" } @$temp_listen ];
+    $conf{listen} = $listen = [ map { /(^\/)|:/ ? $_ : "$_:$conf{conf_port}" } @$temp_listen ];
 }
 
 ### FUNCTION: choose_value( $name, $default )

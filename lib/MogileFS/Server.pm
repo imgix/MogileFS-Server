@@ -26,6 +26,8 @@ use Sys::Syslog ();
 use Time::HiRes ();
 use Net::Netmask;
 use List::Util;
+use FileHandle;
+use Fcntl qw(F_GETFL F_SETFL O_NONBLOCK);
 use Socket qw(SO_KEEPALIVE IPPROTO_TCP TCP_NODELAY);
 
 use MogileFS::Util qw(daemonize);
@@ -121,15 +123,31 @@ sub run {
     # setup server sockets to listen for client connections
     my @servers;
     foreach my $listen (@{ MogileFS->config('listen') }) {
-        my $server = IO::Socket::INET->new(LocalAddr => $listen,
-                                           Type      => SOCK_STREAM,
-                                           Proto     => 'tcp',
-                                           Blocking  => 0,
-                                           Reuse     => 1,
-                                           Listen    => 1024 )
-            or die "Error creating socket: $@\n";
-        $server->sockopt(SO_KEEPALIVE, 1);
-        $server->setsockopt(IPPROTO_TCP, TCP_NODELAY, 1);
+        my $server = "";
+        if ($listen =~ /^\/.+/) {
+          $server = IO::Socket::UNIX->new(Type      => SOCK_STREAM,
+                                          Local     => $listen,
+                                          Listen    => 1024 )
+              or die "Error creating socket: $@\n";
+
+    # needed?
+    # my $fd = fileno($server);
+          my $flags = fcntl(FileHandle->new->fdopen($server, "r"), F_GETFL, 0)
+              or die "Can't get flags for the socket: $!\n";
+
+          $flags = fcntl(FileHandle->new->fdopen($server, "r") , F_SETFL, $flags | O_NONBLOCK)
+              or die "Can't set flags for the socket: $!\n";
+        } else {
+            $server = IO::Socket::INET->new(LocalAddr => $listen,
+                                            Type      => SOCK_STREAM,
+                                            Proto     => 'tcp',
+                                            Blocking  => 0,
+                                            Reuse     => 1,
+                                            Listen    => 1024 )
+                or die "Error creating socket: $@\n";
+            $server->sockopt(SO_KEEPALIVE, 1);
+            $server->setsockopt(IPPROTO_TCP, TCP_NODELAY, 1);
+        }
 
         # save sub to accept a client
         push @servers, $server;
