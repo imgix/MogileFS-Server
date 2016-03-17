@@ -474,7 +474,7 @@ sub replicate {
         $digest = Digest->new($fid_checksum->hashname) if $fid_checksum;
         $digest ||= Digest->new($cls->hashname) if $cls->hashtype;
 
-        my $rv = http_copy(
+        my $rv = http_replicate(
                            sdevid       => $sdevid,
                            ddevid       => $ddevid,
                            fid          => $fid,
