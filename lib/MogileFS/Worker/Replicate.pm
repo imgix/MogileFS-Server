@@ -807,7 +807,146 @@ retry:
     }
     return $dest_error->("Got HTTP status code $dres->{code} PUTing to $durl");
 }
+sub http_replicate {
+    my %opts = @_;
+    my ($sdevid, $ddevid, $fid, $intercopy_cb, $errref, $digest) =
+        map { delete $opts{$_} } qw(sdevid
+                                    ddevid
+                                    fid
+                                    callback
+                                    errref
+                                    digest
+                                    );
+    die if %opts;
+    $fid = MogileFS::FID->new($fid) unless ref($fid);
+    my $fidid = $fid->id;
+    my $expected_clen = $fid->length;
+    my $clen;
+    my $content_md5 = '';
+    my $sconn;
+    my $fid_checksum = $fid->checksum;
+    if ($fid_checksum && $fid_checksum->hashname eq "MD5") {
+        # some HTTP servers may be able to verify Content-MD5 on PUT
+        # and reject corrupted requests.  no HTTP server should reject
+        # a request for an unrecognized header
+        my $b64digest = encode_base64($fid_checksum->{checksum}, "");
+        $content_md5 = "\r\nContent-MD5: $b64digest";
+    }
 
+    my $err_common = sub {
+        my ($err, $msg) = @_;
+        $$errref = $err if $errref;
+        $sconn->close($err) if $sconn;
+        return error($msg);
+    };
+
+    # handles setting unreachable magic; $error->(reachability, "message")
+    my $error_unreachable = sub {
+        return $err_common->("src_error", "Fid $fidid unreachable while replicating: $_[0]");
+    };
+
+    my $src_error = sub {
+        return $err_common->("src_error", $_[0]);
+    };
+
+    # get some information we'll need
+    my $sdev = Mgd::device_factory()->get_by_id($sdevid);
+    my $ddev = Mgd::device_factory()->get_by_id($ddevid);
+
+    return error("Error: unable to get device information: source=$sdevid, destination=$ddevid, fid=$fidid")
+        unless $sdev && $ddev;
+
+    my $s_dfid = MogileFS::DevFID->new($sdev, $fid);
+    my $d_dfid = MogileFS::DevFID->new($ddev, $fid);
+
+    my ($spath, $dpath) = (map { $_->uri_path } ($s_dfid, $d_dfid));
+    my ($shost, $dhost) = (map { $_->host     } ($sdev, $ddev));
+
+    my ($shostip, $sport) = ($shost->ip, $shost->http_get_port);
+    my ($dhostip, $dport) = ($dhost->ip, $dhost->http_port);
+    unless (defined $spath && defined $dpath && defined $shostip && defined $dhostip && $sport && $dport) {
+        # show detailed information to find out what's not configured right
+        error("Error: unable to replicate file fid=$fidid from device id $sdevid to device id $ddevid");
+        error("       http://$shostip:$sport$spath -> http://$dhostip:$dport$dpath");
+        return 0;
+    }
+
+    # need by webdav servers, like lighttpd...
+    $ddev->vivify_directories($d_dfid->url);
+
+    # call a hook for odd casing completely different source data
+    # for specific files.
+    my $shttphost;
+    MogileFS::run_global_hook('replicate_alternate_source',
+                              $fid, \$shostip, \$sport, \$spath, \$shttphost);
+
+    # okay, now get the file
+    my %sopts = ( ip => $shostip, port => $sport );
+
+    my $surl = "/_imgix/mogstorerepl?fidid=$fidid&sdev=$sdevid&ddev=$ddevid&dhostip=$dhostip&dport=$dport&clen=$expected_clen";
+
+    my $repl_cmd = "REPLICATE $surl HTTP/1.0\r\nConnection: keep-alive" .
+              "$content_md5\r\n\r\n";
+    # plugin set a custom host.
+
+    my $data = '';
+    my $sock;
+    my $stries = 0;
+
+retry:
+    $sconn->close("retrying") if $sconn;
+    $stries++;
+    $sconn = $shost->http_conn_get(\%sopts)
+        or return $src_error->("Unable to create source socket to $shostip:$sport for $spath");
+    $sock = $sconn->sock;
+    unless ($sock->write("$repl_cmd")) {
+        goto retry if $sconn->retryable && $stries == 1;
+        return $src_error->("Pipe closed retrieving $spath from $shostip:$sport");
+    }
+
+    # we just want a content length
+    my $sres = read_headers($sock);
+    unless ($sres) {
+        goto retry if $sconn->retryable && $stries == 1;
+        return $error_unreachable->("Error: Resource $surl failed to return an HTTP response");
+    }
+    unless ($sres->{code} >= 200 && $sres->{code} <= 299) {
+        return $error_unreachable->("Error: Resource $surl failed: HTTP $sres->{code}");
+    }
+    my ($wcount, $bytes_to_read, $written, $remain);
+    my $clen = $sres->{len};
+    ($written, $remain) = (0, $clen);
+    my $bytes_to_read = 1024*1024;
+    $bytes_to_read = $remain if $remain < $bytes_to_read;
+    $wcount = 0;
+
+    while ($bytes_to_read) {
+        my $bytes = $sock->read($data, $bytes_to_read);
+        unless (defined $bytes) {
+            return $src_error->("error reading midway through source: $!");
+        }
+        if ($bytes == 0) {
+            return $src_error->("EOF reading midway through source: $!");
+        }
+
+        # now we've read in $bytes bytes
+        $remain -= $bytes;
+        $bytes_to_read = $remain if $remain < $bytes_to_read;
+    }
+
+    $sconn->close("http_close");
+    return 1;
+
+    if ($sres->{keep}) {
+        debug("keepalive, storing connetion to pool");
+        $shost->http_conn_put($sconn);
+        $sconn = undef;
+    } else {
+        debug("no keepalive, closing");
+        $sconn->close("http_close");
+    }
+    return 1;
+}
 1;
 
 # Local Variables:
