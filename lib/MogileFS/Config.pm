@@ -93,6 +93,8 @@ sub load_config {
                              'p|confport=i'  => \$cmdline{conf_port},
                              'l|listen=s@'   => \$cmdline{listen},
                              'w|workers=i'   => \$cmdline{query_jobs},
+                             'delete=i'      => \$cmdline{delete_jobs},
+                             'replicate=i'   => \$cmdline{replicate_jobs},
                              'no_http'       => \$cmdline{no_http},  # OLD, we just eat it to shut it up.
                              'workerport=i'  => \$dummy_workerport,  # eat it for backwards compat
                              'max_disk_age=i'  => \$cmdline{max_disk_age},
