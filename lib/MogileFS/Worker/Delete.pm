@@ -79,10 +79,10 @@ sub delete_devfid {
     my ($self, $dfid) = @_;
 
     # send delete request
-    error("Sending delete for " . $dfid->url) if $Mgd::DEBUG >= 2;
+    error("Sending delete for " . $dfid->url_get) if $Mgd::DEBUG >= 2;
 
     my $res;
-    $dfid->device->host->http("DELETE", $dfid->uri_path, undef, sub { ($res) = @_ });
+    $dfid->device->host->http_get("DELETE", $dfid->uri_path, undef, sub { ($res) = @_ });
     Danga::Socket->SetPostLoopCallback(sub { !defined $res });
     Danga::Socket->EventLoop;
 
